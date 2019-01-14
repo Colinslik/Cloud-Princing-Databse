@@ -1,0 +1,5 @@
+pda.spec
+build/
+dist/
+etc/pda.conf.user
+var/

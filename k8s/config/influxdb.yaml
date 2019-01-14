@@ -1,0 +1,106 @@
+##########################
+#  influxdb - ai-user    #
+##########################
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: influxdb
+  namespace: alameter
+  labels:
+    app: influxdb
+spec:
+  ports:
+  - port: 8086
+    name: http-influxdb
+  selector:
+    app: influxdb
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: influxdb
+  namespace: alameter
+spec:
+  serviceName: influxdb
+  selector:
+    matchLabels:
+      app : influxdb
+  template:
+    metadata:
+      labels:
+        app: influxdb
+    spec:
+      containers:
+      - name: influxdb
+        image: alameter/influxdb:running
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8086
+        tty:  true
+        #command: ["sh"]
+        #args: ["/influxdb_init.sh"]
+        #livenessProbe:
+        #  exec:
+        #    command:
+        #      - "bash"
+        #      - "-c"
+        #      - /bin/sh /health_checker.sh || exit 1
+        #  initialDelaySeconds: 10  # Number of seconds after the container has started before liveness or readiness probes are initiated.
+        #  periodSeconds: 10  # How often (in seconds) to perform the probe
+        #  timeoutSeconds: 1 # Number of seconds after which the probe times out 
+        #  successThreshold: 1 # Minimum consecutive successes for the probe to be considered successful after having failed
+        #  failureThreshold: 1 # When a Pod starts and the probe fails, Kubernetes will try failureThreshold times before giving up
+        #readinessProbe:
+        #  tcpSocket:
+        #    port: 8086
+        #  initialDelaySeconds: 3600
+        #  periodSeconds: 30
+        #  timeoutSeconds: 10
+        #  successThreshold: 1
+        #  failureThreshold: 3
+        resources:
+          requests:
+            memory: "256Mi"
+            # ephemeral-storage: 8Gi  # skip and avoid umounting volume error
+          limits:
+            memory: "512Mi"
+        #envFrom:
+        #- configMapRef:
+        #    name: influxdb-env
+        volumeMounts:
+        - mountPath: "/var/lib/influxdb"
+          subPath: alameter/influxdb/influxdb/varlibinfluxdb
+          name: depot
+        - mountPath: /var/log
+          subPath: alameter/influxdb/influxdb/varlog
+          name: depot  
+        - name: localtime
+          mountPath: "/etc/localtime"
+          readOnly: true
+        - mountPath: /depot
+          name: depot 
+      #initContainers:
+      #- name: init-mgmt
+      #  image: prophetservice/mgmt:running
+      #  imagePullPolicy: Never
+      #  command: ["sh", "-c", "/opt/prophetstor/federatorai/bin/init-influxdb.sh"]
+      #  volumeMounts:
+      #  - name: federatorai
+      #    mountPath: /opt/prophetstor/federatorai
+      #restartPolicy: Always
+      volumes:
+      - name: localtime
+        hostPath:
+          path: /etc/localtime
+          type: File
+      - name: depot
+        flexVolume:
+          driver: rook.io/rook
+          fsType: ceph
+          options:
+            fsName: rook-filesystem # name of the filesystem specified in the filesystem CRD.
+            clusterNamespace: rook-ceph # namespace where the Rook cluster is deployed
+      - name: federatorai
+        hostPath:
+          path: /opt/prophetstor/federatorai
