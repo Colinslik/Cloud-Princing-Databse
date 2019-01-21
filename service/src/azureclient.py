@@ -1,121 +1,116 @@
-import json
-import requests
-import azure
+import time
+
+from db.influx_instancedb import InstanceDB
+from db.influx_networkdb import NetworkDB
+from db.influx_storagedb import StorageDB
+from vendorclient import VendorlientApi
 
 
-class AzureClientApi(object):
+class AzureClientApi(VendorlientApi):
 
-    def __init__(self, endpoint):
-        self.endpoint = endpoint
+    def __init__(self,
+                 endpoint='https://azure.microsoft.com/api/v2/pricing',
+                 offercode='virtual-machines-software'):
+        super(AzureClientApi, self).__init__(endpoint, offercode)
 
-    def _send_cmd(self, url_arg, params=None, method="GET"):
+    def get_api_result(self):
+        url_arg = '{0}/calculator'.format(
+            self.offercode)
 
-        url = '{0}/{1}'.format(self.endpoint, url_arg)
-
-        headers = {"Content-Type": "application/json"}
-
-        try:
-            if method == "GET":
-                result = requests.get(
-                    url, headers=headers, verify=False)
-            elif method == "PUT":
-                result = requests.put(
-                    url, headers=headers, data=json.dumps(params), verify=False)
-        except Exception as e:
-            print ("%s" % (e))
-            return None
-        else:
-            if result.status_code == 200:
-                return json.loads(result.text)
-            else:
-                print (
-                    "%s %s" % (result.status_code, result.text))
-                return None
-
-    def update_instance(self, vendor, region, params):
-        url_arg = '{0}/instances/{1}'.format(vendor, region)
-        body = {
-            "instances": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT")
-
-    def update_storage(self, vendor, region, params):
-        url_arg = '{0}/storages/{1}'.format(vendor, region)
-        body = {
-            "storages": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT")
-
-    def update_network(self, vendor, region, params):
-        url_arg = '{0}/networkouts/{1}'.format(vendor, region)
-        body = {
-            "networkouts": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT")
+        return self._send_cmd(url_arg, "GET")
 
 
 if __name__ == "__main__":
-    azure = azure.Azure()
-    azureclient = AzureClientApi("http://172.31.6.18:8345/alameter/api")
+    try:
+        azureclient = AzureClientApi(
+            offercode='virtual-machines-software')
+        json_data = azureclient.load_from_json_file(
+            '/opt/prophetstor/alameter/var/price_data/', 'virtual-machines-software.json')
+        updated_time = str(time.time())
+        db_instance = InstanceDB()
+        db_storage = StorageDB()
+        db_network = NetworkDB()
+        for key, value in json_data["offers"].iteritems():
+            if "baseOfferSlug" not in value:
+                continue
+            params = {
+                "unit": "Hrs",
+                "currency": "USD",
+                "instancetype": key,
+                "operatingsystem": value["baseOfferSlug"],
+                "vcpu": str(value["cores"]),
+                "memory": str(value["ram"]),
+                "storage": str(value["diskSize"]),
+                "isvcpu": value["isVcpu"]
+            }
+            for region, price in value["prices"].iteritems():
+                params.update({
+                    "region": region,
+                    "priceperunit": str(price["value"])
+                })
 
-    for region, data_raw in azure.get_instance_price().iteritems():
-        for instance_type, data_info in data_raw.iteritems():
-            azureclient.update_instance(
-                "Azure",
-                region,
-                {"image_type": "linux",
-                 "machine_type": "NA",
-                 "instance_type": instance_type,
-                 "region": region,
-                 "ecu": data_info['ecu'] if 'ecu' in data_info else 'NA',
-                 "memory": data_info['memory'] if 'memory' in data_info else -1.0,
-                 "price": data_info['price'] if 'price' in data_info and isinstance(data_info['price'], float) else 0.0,
-                 "vcpu": data_info['vcpu'] if 'vcpu' in data_info else -1,
-                 "storage_size": data_info['storage_size'] if 'storage_size' in data_info else 'NA',
-                 "storage_type": data_info['storage_type'] if 'storage_type' in data_info else 'NA',
-                 })
+#                print params
+#                params.update({"updated": updated_time})
+#                azureclient.update_instance(
+#                    "azure", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                azureclient.update_database(
+                    db_instance, "azure", updated_time, params)
 
-    for region, data_raw in azure.get_storage_price().iteritems():
-        for storage_type, data_info in data_raw.iteritems():
-            azureclient.update_storage(
-                "Azure",
-                region,
-                {"region": region,
-                 "size": data_info["size"],
-                 "storage_type": storage_type,
-                 "price": data_info["price"] if isinstance(data_info["price"], float) else 0.0
-                 })
+        azureclient = AzureClientApi(
+            offercode='managed-disks')
+        json_data = azureclient.load_from_json_file(
+            '/opt/prophetstor/alameter/var/price_data/', 'managed-disks.json')
+        for key, value in json_data["offers"].iteritems():
+            if "size" not in value:
+                continue
+            params = {
+                "unit": "Month",
+                "currency": "USD",
+                "volumetype": key,
+                "volumesize": str(value["size"]) if "size" in value else "0",
+                "iops": str(value["iops"]) if "iops" in value else "0",
+                "throughput": str(value["speed"]) if "speed" in value else "0"
+            }
+            for region, price in value["prices"].iteritems():
+                params.update({
+                    "region": region,
+                    "priceperunit": str(price["value"])
+                })
 
-    for region, data_raw in azure.get_network_price().iteritems():
-        for limit, price in data_raw.iteritems():
-            if '-' in limit:
-                pos = limit.find("-")
-                upper_limit = float(
-                    limit[:pos]) * 1024 if 'TB' in limit[-2:] else float(limit[:-2])
-                lower_limit = float(
-                    limit[pos + 1:-2]) * 1024 if 'TB' in limit[-2:] else float(limit[:-2])
-            elif '>' in limit:
-                pos = limit.find(">")
-                upper_limit = -1.0
-                lower_limit = float(
-                    limit[pos + 1:-2]) * 1024 if 'TB' in limit[-2:] else float(limit[:-2])
-            elif '<' in limit:
-                pos = limit.find("<")
-                upper_limit = float(
-                    limit[pos + 1:-2]) * 1024 if 'TB' in limit[-2:] else float(limit[:-2])
-                lower_limit = -1.0
-            else:
-                upper_limit = float(
-                    limit[:-2]) * 1024 if 'TB' in limit[-2:] else float(limit[:-2])
-                lower_limit = -1.0
-            azureclient.update_network(
-                "Azure",
-                region,
-                {"region": region,
-                 "upper_limit": upper_limit,
-                 "lower_limit": lower_limit,
-                 "price": price if isinstance(price, float) else 0.0
-                 })
-#    print azure.get_instance_price()
-#    print azure.get_storage_price()
-#    print azure.get_network_price()
+#                print params
+#                params.update({"updated": updated_time})
+#                azureclient.update_storage(
+#                    "azure", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                azureclient.update_database(
+                    db_storage, "azure", updated_time, params)
+
+        azureclient = AzureClientApi(
+            offercode='bandwidth')
+        json_data = azureclient.load_from_json_file(
+            '/opt/prophetstor/alameter/var/price_data/', 'bandwidth.json')
+        for key, value in json_data["graduatedOffers"].iteritems():
+            params = {
+                "unit": "Month",
+                "currency": "USD"
+            }
+            begin_range = "0"
+            for region, pricelist in value.iteritems():
+                for pricedata in pricelist["prices"]:
+                    params.update({
+                        "region": region,
+                        "priceperunit": str(pricedata["price"]["value"]),
+                        "transfertype": "DOWNLOAD",
+                        "beginrange": begin_range,
+                        "endrange": str(pricedata["limit"])
+                    })
+
+                    begin_range = str(pricedata["limit"])
+#                    print params
+#                    params.update({"updated": updated_time})
+#                    azureclient.update_network(
+#                        "azure", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                    azureclient.update_database(
+                        db_network, "azure", updated_time, params)
+
+    except Exception as e:
+        print e

@@ -1,51 +1,18 @@
-import json
-import os
+import time
 
-import requests
-import urllib3
-
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from db.influx_instancedb import InstanceDB
+from db.influx_networkdb import NetworkDB
+from db.influx_storagedb import StorageDB
+from vendorclient import VendorlientApi
 
 
-class AWSClientApi(object):
+class AWSClientApi(VendorlientApi):
 
     def __init__(self,
                  endpoint='https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws',
                  offercode='AmazonEC2',
-                 outputtype='json',
-                 db_endpoint='http://172.31.6.71:31256/alameter/api'):
-        self.endpoint = endpoint
-        self.offercode = offercode
-        self.outputtype = outputtype
-        self.db_endpoint = db_endpoint
-
-    def _send_cmd(self, url_arg, params=None, method="GET", endpoint=None):
-
-        if not endpoint:
-            endpoint = self.endpoint
-
-        url = '{0}/{1}'.format(endpoint, url_arg)
-
-        headers = {"Content-Type": "application/json"}
-
-        try:
-            if method == "GET":
-                result = requests.get(
-                    url, headers=headers, verify=False)
-            elif method == "PUT":
-                result = requests.put(
-                    url, headers=headers, data=json.dumps(params), verify=False)
-        except Exception as e:
-            print ("%s" % (e))
-            return None
-        else:
-            if result.status_code == 200:
-                return json.loads(result.text)
-            else:
-                print (
-                    "%s %s" % (result.status_code, result.text))
-                return None
+                 outputtype='json'):
+        super(AWSClientApi, self).__init__(endpoint, offercode, outputtype)
 
     def get_api_result(self):
         url_arg = '{0}/current/index.{1}'.format(
@@ -53,50 +20,17 @@ class AWSClientApi(object):
 
         return self._send_cmd(url_arg, "GET")
 
-    def load_from_json_file(self, filename):
-        if not os.path.exists(filename):
-            json_data = self.get_api_result()
-            with open(filename, 'w') as outfile:
-                json.dump(json_data, outfile)
-        with open(filename) as f:
-            data = json.load(f)
-
-        return data
-
-    def update_instance(self, vendor, region, params):
-        url_arg = '{0}/instances/{1}'.format(vendor, region)
-        body = {
-            "instances": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT", self.db_endpoint)
-
-    def update_storage(self, vendor, region, params):
-        url_arg = '{0}/storages/{1}'.format(vendor, region)
-        body = {
-            "storages": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT", self.db_endpoint)
-
-    def update_network(self, vendor, region, params):
-        url_arg = '{0}/networks/{1}'.format(vendor, region)
-        body = {
-            "networks": [params]
-        }
-        return self._send_cmd(url_arg, body, "PUT", self.db_endpoint)
-
 
 if __name__ == "__main__":
     try:
         awsclient = AWSClientApi()
-        json_data = awsclient.load_from_json_file('./AmazonEC2.json')
+        json_data = awsclient.load_from_json_file(
+            '/opt/prophetstor/alameter/var/price_data/', 'AmazonEC2.json')
+        updated_time = str(time.time())
+        db_instance = InstanceDB()
+        db_storage = StorageDB()
+        db_network = NetworkDB()
         for key, value in json_data["terms"]["OnDemand"].iteritems():
-            '''
-            print key, value.values()[0]["priceDimensions"].values()[0]["description"], \
-                value.values()[0]["priceDimensions"].values()[0]["unit"], \
-                value.values()[0]["priceDimensions"].values()[0]["pricePerUnit"].keys()[0], \
-                value.values()[0]["priceDimensions"].values()[
-                0]["pricePerUnit"].values()[0]
-            '''
             params = {
                 "description": value.values()[0]["priceDimensions"].values()[0]["description"],
                 "unit": value.values()[0]["priceDimensions"].values()[0]["unit"],
@@ -105,69 +39,73 @@ if __name__ == "__main__":
                     0]["pricePerUnit"].values()[0]
             }
             if json_data["products"][key]["productFamily"] == "Compute Instance":
-                '''
-                print json_data["products"][key]["productFamily"], \
-                    json_data["products"][key]["attributes"]["location"], \
-                    json_data["products"][key]["attributes"]["instanceType"], \
-                    json_data["products"][key]["attributes"]["vcpu"], \
-                    json_data["products"][key]["attributes"]["memory"], \
-                    json_data["products"][key]["attributes"]["storage"], \
-                    json_data["products"][key]["attributes"]["networkPerformance"], \
-                    json_data["products"][key]["attributes"]["operatingSystem"], \
-                    json_data["products"][key]["attributes"]["ecu"]
-                '''
                 params.update({
+                    "region": json_data["products"][key]["attributes"]["location"],
                     "instancetype": json_data["products"][key]["attributes"]["instanceType"],
                     "vcpu": json_data["products"][key]["attributes"]["vcpu"],
                     "memory": json_data["products"][key]["attributes"]["memory"],
                     "storage": json_data["products"][key]["attributes"]["storage"],
                     "networkperformance": json_data["products"][key]["attributes"]["networkPerformance"],
                     "operatingsystem": json_data["products"][key]["attributes"]["operatingSystem"],
-                    "ecu": json_data["products"][key]["attributes"]["ecu"]
+                    "ecu": json_data["products"][key]["attributes"]["ecu"],
+                    "preinstalledsw": json_data["products"][key]["attributes"]["preInstalledSw"]
                 })
+                if "On Demand" not in params["description"]:
+                    continue
 
-                awsclient.update_instance("AWS", str(
-                    json_data["products"][key]["attributes"]["location"]), params)
+#                print params
+#                params.update({"updated": updated_time})
+#                awsclient.update_instance(
+#                    "aws", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                awsclient.update_database(
+                    db_instance, "aws", updated_time, params)
 
             elif json_data["products"][key]["productFamily"] == "Storage":
-                '''
-                print json_data["products"][key]["productFamily"], \
-                    json_data["products"][key]["attributes"]["location"], \
-                    json_data["products"][key]["attributes"]["volumeType"], \
-                    json_data["products"][key]["attributes"]["maxVolumeSize"], \
-                    json_data["products"][key]["attributes"]["maxIopsvolume"], \
-                    json_data["products"][key]["attributes"]["maxThroughputvolume"]
-                '''
                 params.update({
+                    "region": json_data["products"][key]["attributes"]["location"],
                     "volumetype": json_data["products"][key]["attributes"]["volumeType"],
                     "volumesize": json_data["products"][key]["attributes"]["maxVolumeSize"],
                     "iops": json_data["products"][key]["attributes"]["maxIopsvolume"],
                     "throughput": json_data["products"][key]["attributes"]["maxThroughputvolume"]
                 })
 
-                awsclient.update_storage("AWS", str(
-                    json_data["products"][key]["attributes"]["location"]), params)
+#                print params
+#                params.update({"updated": updated_time})
+#                awsclient.update_storage(
+#                    "aws", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                awsclient.update_database(
+                    db_storage, "aws", updated_time, params)
 
             elif json_data["products"][key]["productFamily"] == "Data Transfer":
                 if json_data["products"][key]["attributes"]["fromLocation"] == "External":
-                    # print "UPLOAD",
-                    # json_data["products"][key]["attributes"]["toLocation"]
                     params.update({
+                        "region": json_data["products"][key]["attributes"]["toLocation"],
                         "transfertype": "UPLOAD",
+                        "beginrange": value.values()[0]["priceDimensions"].values()[0]["beginRange"],
+                        "endrange": value.values()[0]["priceDimensions"].values()[0]["endRange"]
                     })
 
-                    awsclient.update_network("AWS", str(
-                        json_data["products"][key]["attributes"]["toLocation"]), params)
+#                    print params
+#                    params.update({"updated": updated_time})
+#                    awsclient.update_network(
+#                        "aws", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                    awsclient.update_database(
+                        db_network, "aws", updated_time, params)
 
                 elif json_data["products"][key]["attributes"]["toLocation"] == "External":
-                    # print "DOWNLOAD",
-                    # json_data["products"][key]["attributes"]["fromLocation"]
                     params.update({
+                        "region": json_data["products"][key]["attributes"]["fromLocation"],
                         "transfertype": "DOWNLOAD",
+                        "beginrange": value.values()[0]["priceDimensions"].values()[0]["beginRange"],
+                        "endrange": value.values()[0]["priceDimensions"].values()[0]["endRange"]
                     })
 
-                    awsclient.update_network("AWS", str(
-                        json_data["products"][key]["attributes"]["fromLocation"]), params)
+#                    print params
+#                    params.update({"updated": updated_time})
+#                    awsclient.update_network(
+#                        "aws", "http://172.31.6.71:8999/alameter-api/v1/prices", params)
+                    awsclient.update_database(
+                        db_network, "aws", updated_time, params)
 
     except Exception as e:
         print e

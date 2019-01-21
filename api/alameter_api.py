@@ -36,15 +36,15 @@ def not_found(e):
 
 
 # add api resources
-api.add_resource(ConfigList, '/<string:vendor>/configs',
-                 '/<string:vendor>/configs/')
-api.add_resource(Config, '/<string:vendor>/configs/<string:id>')
-api.add_resource(InstanceList, '/<string:vendor>/instances/<string:region>',
-                 '/<string:vendor>/instances/<string:region>/')
-api.add_resource(NetworkList, '/<string:vendor>/networks/<string:region>',
-                 '/<string:vendor>/networkouts/<string:region>/')
-api.add_resource(StorageList, '/<string:vendor>/storages/<string:region>',
-                 '/<string:vendor>/storages/<string:region>/')
+api.add_resource(ConfigList, '/prices/<string:vendor>/configs',
+                 '/prices/<string:vendor>/configs/')
+api.add_resource(Config, '/prices/<string:vendor>/configs/<string:id>')
+api.add_resource(InstanceList, '/prices/<string:vendor>/instances',
+                 '/prices/<string:vendor>/instances/')
+api.add_resource(NetworkList, '/prices/<string:vendor>/networks',
+                 '/prices/<string:vendor>/networks/')
+api.add_resource(StorageList, '/prices/<string:vendor>/storage',
+                 '/prices/<string:vendor>/storage/')
 if __name__ == '__main__':
     app.debug = True
     app.run(host='0.0.0.0', port=8999)

@@ -19,30 +19,39 @@ class StorageList(Resource):
     def __init__(self):
         self.reqparse = reqparse.RequestParser()
         self.reqparse.add_argument('limit', type=int, location='args')
+        self.reqparse.add_argument('page', type=int, location='args')
         self.reqparse.add_argument('offset', type=int, location='args')
         self.reqparse.add_argument('tsfrom', type=str, location='args')
         self.reqparse.add_argument('tsto', type=str, location='args')
+        self.reqparse.add_argument('region', type=str, location='args')
+        self.reqparse.add_argument('volumetype', type=str, location='args')
 
         super(StorageList, self).__init__()
 
-    def get(self, vendor, region):
+    def get(self, vendor):
         # list
         args = self.reqparse.parse_args()
         limit = args.get('limit') or 20
+        page = args.get('page') or 0
         offset = args.get('offset') or 0
 
         try:
             db = StorageDB()
 
-            cond = "vendor = '%s'" % vendor
-            if region == 'ALL':
-                cond += ' AND "region" != \'NA\''
-            else:
-                cond += ' AND "region" = \'%s\'' % region
+            cond = '"vendor" = \'%s\'' % vendor
+            if args['region']:
+                cond += ' AND "region" = \'%s\'' % args['region']
+            if args['volumetype']:
+                cond += ' AND "volumetype" = \'%s\'' % args['volumetype']
             if not args['tsfrom'] and not args['tsto']:
-                rows, total = db.get_last()
-                cond += ' AND "time" <= \'{0}\' AND "time" >= \'{0}\' - 1d'.format(
-                    rows[0]["time"])
+                rows, total = db.get_last_group(["vendor"], 3)
+                updated = "0"
+                for item in rows:
+                    if item["vendor"] == vendor:
+                        updated = item["updated"]
+                        break
+                cond += ' AND "updated" = \'{0}\''.format(
+                    updated)
             else:
                 if args['tsfrom']:
                     cond += ' AND "time" >= \'%s\'' % (args['tsfrom'])
@@ -51,7 +60,8 @@ class StorageList(Resource):
 
             rows, total = db.list(condition=cond,
                                   sort=[("time", "DESC")],
-                                  limit=limit, offset=offset)
+                                  limit=limit, page=page,
+                                  offset=offset)
 
             for item in rows:
                 for key, value in item.iteritems():
@@ -63,27 +73,29 @@ class StorageList(Resource):
             formatted_lines = traceback.format_exc().splitlines()
             return {"message": formatted_lines[-1]}, INTERNAL_SERVER_ERROR
 
-        return {'storages': rows, 'count': len(rows), 'offset': offset, 'total': total}, OK
+        return {'storage': rows, 'count': len(rows), 'limit': limit, 'page': page, 'offset': offset, 'total': total}, OK
 
-    def put(self, vendor, region):
+    def put(self, vendor):
         # insert or update
-        self.reqparse.add_argument('storages', type=list, location='json')
+        self.reqparse.add_argument('storage', type=list, location='json')
         args = self.reqparse.parse_args()
-        storages = args['storages']
+        storage = args['storage']
         db = StorageDB()
 
         # insert
         fields = {}
-        for item in storages:
-            tags = {"region": str(region),
-                    "vendor": str(vendor)}
+        for item in storage:
+            tags = {"vendor": str(vendor)}
             for key, value in item.iteritems():
                 if isinstance(value, int):
                     fields.update({str(key): int(value)})
                 elif isinstance(value, long):
                     fields.update({str(key): float(value)})
                 else:
-                    fields.update({str(key): str(value)})
+                    if key == "region" or key == "updated":
+                        tags.update({str(key): str(value)})
+                    else:
+                        fields.update({str(key): str(value)})
             rows, total = db.insert(tags, fields)
 
-        return {'storages': rows, 'count': len(rows), 'offset': 0, 'total': total}, OK
+        return {'storage': rows, 'count': len(rows), 'limit': 20, 'page': 0, 'offset': 0, 'total': total}, OK
